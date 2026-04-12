@@ -23,6 +23,8 @@ mod session_store;
 mod shortcuts;
 mod ssh;
 mod terminal;
+mod terminal_emulator;
+pub mod tmux;
 mod transcript;
 mod usage_dashboard;
 mod usage_stats;
@@ -35,7 +37,7 @@ pub use alacritty_terminal::selection::SelectionType;
 pub use attention::{AttentionId, AttentionItem, AttentionSeverity, AttentionState};
 pub use board::{Board, ShutdownProgress, WorkspaceDockSide, WorkspaceLayout};
 pub use config::{
-    Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig,
+    BackendKind, Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig, TerminalConfig, WindowConfig,
     WorkspaceConfig,
 };
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
@@ -62,6 +64,9 @@ pub use session_store::{
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{AgentNotification, Terminal, open_url};
+pub use terminal_emulator::TerminalEmulator;
+pub use tmux::terminal::TmuxTerminal;
+pub use tmux::{TmuxBackend, TmuxEvent, TmuxPaneId, TmuxSessionId, TmuxWindowId};
 pub use transcript::PanelTranscript;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};

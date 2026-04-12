@@ -91,18 +91,21 @@ impl<'a> TerminalView<'a> {
             });
         }
 
+        // Use the TerminalEmulator trait to handle both PTY and tmux backends.
+        let has_emulator = self.panel.emulator().is_some();
         let allow_grid_cache = !self.panel.had_recent_output()
-            && self.panel.terminal().is_some_and(|terminal| !terminal.has_selection())
+            && self.panel.emulator().is_some_and(|emu| !emu.has_selection())
             && !interaction.body.dragged()
             && !interaction.scrollbar.dragged();
 
-        if ui.is_rect_visible(interaction.layout.outer)
-            && let Some(terminal) = self.panel.terminal_mut()
-        {
-            let history_size = terminal.history_size();
+        if ui.is_rect_visible(interaction.layout.outer) && has_emulator {
+            // We need to go through the concrete types for `with_renderable_content`
+            // because it uses a generic closure that can't be called through a trait
+            // object. Route to whichever backend is active.
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
             let mut grid_cache = self.grid_cache.take();
-            terminal.with_renderable_content(|content| {
+
+            let mut render_fn = |content: alacritty_terminal::term::RenderableContent<'_>, history_size: usize| {
                 let cursor = content.cursor;
                 let display_offset = content.display_offset;
                 render_grid(
@@ -129,7 +132,15 @@ impl<'a> TerminalView<'a> {
                     history_size,
                     scrollbar_highlighted,
                 );
-            });
+            };
+
+            if let Some(terminal) = self.panel.terminal_mut() {
+                let history_size = terminal.history_size();
+                terminal.with_renderable_content(|content| render_fn(content, history_size));
+            } else if let Some(tmux_term) = self.panel.tmux_terminal_mut() {
+                let history_size = tmux_term.history_size();
+                tmux_term.with_renderable_content(|content| render_fn(content, history_size));
+            }
             self.grid_cache = grid_cache;
         }
 

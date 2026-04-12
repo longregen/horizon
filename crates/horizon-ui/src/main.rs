@@ -16,6 +16,7 @@ mod remote_hosts_overlay;
 mod search_overlay;
 mod terminal_widget;
 mod theme;
+pub mod tmux_keys;
 mod usage_widget;
 
 use std::fmt::Write as _;
