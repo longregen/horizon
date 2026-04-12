@@ -510,7 +510,7 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            let grid_cache = if panel.terminal().is_some() {
+                            let grid_cache = if panel.content.is_terminal() {
                                 Some(terminal_grid_cache.entry(panel_id).or_default())
                             } else {
                                 None

@@ -199,7 +199,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 
 const URL_SCHEMES: [&str; 3] = ["https://", "http://", "file://"];
 
-pub(super) fn find_url_at_column(chars: &[char], col: usize) -> Option<String> {
+pub(crate) fn find_url_at_column(chars: &[char], col: usize) -> Option<String> {
     for scheme in URL_SCHEMES {
         let scheme_chars: Vec<char> = scheme.chars().collect();
         let scheme_len = scheme_chars.len();
@@ -259,7 +259,7 @@ fn unmatched_closing_delimiter(chars: &[char], start: usize, end: usize, open: c
     false
 }
 
-pub(super) fn find_file_path_at_column(chars: &[char], col: usize) -> Option<String> {
+pub(crate) fn find_file_path_at_column(chars: &[char], col: usize) -> Option<String> {
     let mut index = 0;
     while index < chars.len() {
         let is_path_start = (chars[index] == '/'

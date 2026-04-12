@@ -17,6 +17,9 @@ pub enum Error {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("Tmux error: {0}")]
+    Tmux(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

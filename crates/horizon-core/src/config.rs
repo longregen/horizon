@@ -410,15 +410,34 @@ impl Default for OverlaysConfig {
     }
 }
 
+/// The terminal backend to use for panel I/O.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendKind {
+    /// Direct PTY via `alacritty_terminal` (default).
+    #[default]
+    Pty,
+    /// tmux control mode — sessions survive Horizon/SSH disconnect.
+    Tmux,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FeaturesConfig {
     pub attention_feed: bool,
+    /// Terminal backend: "pty" (default) or "tmux".
+    pub backend: BackendKind,
+    /// Custom tmux socket name (default: "horizon").
+    pub tmux_socket: Option<String>,
 }
 
 impl Default for FeaturesConfig {
     fn default() -> Self {
-        Self { attention_feed: true }
+        Self {
+            attention_feed: true,
+            backend: BackendKind::default(),
+            tmux_socket: None,
+        }
     }
 }
 

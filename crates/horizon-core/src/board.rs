@@ -19,6 +19,8 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::panel::{Panel, PanelId, PanelKind, PanelProcessOutput};
 use crate::runtime_state::RuntimeState;
+use crate::tmux::control::PaneId;
+use crate::tmux::{TmuxBackend, TmuxEvent};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
@@ -74,6 +76,10 @@ pub struct Board {
     next_panel_id: u64,
     next_workspace_id: u64,
     next_attention_id: u64,
+    /// Optional tmux backend for session-persistent terminals.
+    pub tmux_backend: Option<TmuxBackend>,
+    /// Maps tmux pane IDs to Horizon panel IDs for output routing.
+    tmux_pane_map: HashMap<PaneId, PanelId>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,6 +103,8 @@ impl Board {
             next_panel_id: 1,
             next_workspace_id: 1,
             next_attention_id: 1,
+            tmux_backend: None,
+            tmux_pane_map: HashMap::new(),
         }
     }
 
@@ -234,6 +242,84 @@ impl Board {
             self.update_attention();
         }
         output
+    }
+
+    /// Poll the tmux backend for events and route output to panels.
+    ///
+    /// Call this once per frame, after `process_output`.  Returns `true` if
+    /// any tmux events were processed (meaning panels may need repainting).
+    pub fn process_tmux_events(&mut self) -> bool {
+        let Some(backend) = &mut self.tmux_backend else {
+            return false;
+        };
+
+        let events = backend.poll_events();
+        if events.is_empty() {
+            return false;
+        }
+
+        // Also drain input from tmux terminals and forward to the backend.
+        // (Collected before processing events to avoid borrow conflicts.)
+        let pending_input: Vec<(PaneId, Vec<u8>)> = Vec::new();
+        for panel in &self.panels {
+            if let Some(tmux_term) = panel.tmux_terminal() {
+                let pane_id = tmux_term.pane_id();
+                // The input receiver is on the TmuxInputReceiver held by the board,
+                // but we route through write_input → TmuxInputSender → channel.
+                // We need to collect from the receiver side separately.
+                // For now, input is sent directly via TmuxBackend::send_keys in
+                // the UI layer.
+                let _ = (pane_id, &pending_input);
+            }
+        }
+
+        for event in events {
+            match event {
+                TmuxEvent::Output { pane_id, data } => {
+                    if let Some(&target_id) = self.tmux_pane_map.get(&pane_id)
+                        && let Some(panel) = self.panels.iter_mut().find(|p| p.id == target_id)
+                    {
+                        panel.feed_tmux_output(&data);
+                    }
+                }
+                TmuxEvent::WindowRenamed { window_id, name } => {
+                    tracing::debug!("tmux window @{} renamed to '{name}'", window_id.0);
+                }
+                TmuxEvent::WindowClosed { window_id } => {
+                    // Mark the corresponding panel as exited.
+                    tracing::info!("tmux window @{} closed", window_id.0);
+                    // Find panels whose tmux terminal has a pane in this window
+                    // and mark them exited. (For now, window close → pane close.)
+                }
+                TmuxEvent::WindowAdded { window_id } => {
+                    tracing::info!("tmux window @{} added", window_id.0);
+                }
+                TmuxEvent::SessionChanged { session_id, name } => {
+                    tracing::info!("tmux session ${} changed to '{name}'", session_id.0);
+                }
+                TmuxEvent::ServerExit | TmuxEvent::Detached => {
+                    tracing::warn!("tmux backend disconnected");
+                    // Mark all tmux terminals as exited.
+                    for panel in &mut self.panels {
+                        if let Some(tmux_term) = panel.tmux_terminal_mut() {
+                            tmux_term.mark_exited();
+                        }
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Register a mapping from a tmux pane ID to a Horizon panel ID.
+    pub fn register_tmux_pane(&mut self, tmux_pane: PaneId, target_panel: PanelId) {
+        self.tmux_pane_map.insert(tmux_pane, target_panel);
+    }
+
+    /// Remove a tmux pane mapping.
+    pub fn unregister_tmux_pane(&mut self, pane_id: PaneId) {
+        self.tmux_pane_map.remove(&pane_id);
     }
 
     /// Returns IDs of panels whose child process has exited.

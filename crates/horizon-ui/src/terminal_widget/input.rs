@@ -87,7 +87,7 @@ pub(super) fn handle_terminal_pointer_input(
         return;
     }
 
-    let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
+    let Some(terminal_mode) = panel.emulator().map(horizon_core::TerminalEmulator::mode) else {
         return;
     };
     let pointer_buttons = ui.input(|input| input::PointerButtons {
@@ -138,8 +138,8 @@ pub(super) fn handle_terminal_pointer_input(
     // Show pointing hand when Ctrl/Cmd hovering over clickable content.
     if ui.input(|input| input.modifiers.ctrl || input.modifiers.command)
         && let Some(point) = pointer_context.hovered_point
-        && let Some(terminal) = panel.terminal()
-        && terminal.clickable_at_point(point.line, point.column).is_some()
+        && let Some(emu) = panel.emulator()
+        && emu.clickable_at_point(point.line, point.column).is_some()
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -298,8 +298,8 @@ fn handle_pointer_button(
             pointer.visible_rows,
             pointer.visible_cols,
         )
-        && let Some(terminal) = panel.terminal()
-        && let Some(target) = terminal.clickable_at_point(point.line, point.column)
+        && let Some(emu) = panel.emulator()
+        && let Some(target) = emu.clickable_at_point(point.line, point.column)
     {
         horizon_core::open_url(&target);
         return;
@@ -378,7 +378,7 @@ fn handle_scrollbar_drag(ui: &mut egui::Ui, panel: &mut Panel, interaction: &Ter
             .input(|input| input.pointer.interact_pos())
             .map(|position| transform_pos(from_global, position))
     {
-        let history_size = panel.terminal().map_or(0, horizon_core::Terminal::history_size);
+        let history_size = panel.emulator().map_or(0, horizon_core::TerminalEmulator::history_size);
         let target_scrollback = scrollbar_pointer_to_scrollback(
             pointer_position,
             interaction.scrollbar.rect.shrink2(Vec2::new(2.0, 2.0)),
@@ -441,8 +441,8 @@ fn handle_pointer_selection_drag(
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let lines = (lines as i32).min(5);
         panel.scroll_scrollback_by(lines);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(0, 0, TerminalSide::Left);
+        if let Some(emu) = panel.emulator_mut() {
+            emu.update_selection(0, 0, TerminalSide::Left);
         }
     } else if pos.y > body_rect.max.y {
         let overshoot = pos.y - body_rect.max.y;
@@ -452,13 +452,13 @@ fn handle_pointer_selection_drag(
         panel.scroll_scrollback_by(-lines);
         let last_row = visible_rows.saturating_sub(1);
         let last_col = visible_cols.saturating_sub(1);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
+        if let Some(emu) = panel.emulator_mut() {
+            emu.update_selection(usize::from(last_row), usize::from(last_col), TerminalSide::Right);
         }
     } else if let Some(point) = grid_point_from_position(body_rect, pos, metrics, visible_rows, visible_cols) {
         let side = cell_side(pos, body_rect, metrics, point);
-        if let Some(terminal) = panel.terminal_mut() {
-            terminal.update_selection(point.line, point.column, side);
+        if let Some(emu) = panel.emulator_mut() {
+            emu.update_selection(point.line, point.column, side);
         }
     }
 }

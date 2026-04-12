@@ -132,7 +132,8 @@ impl HorizonApp {
         if panel_output.cwd_changed {
             self.mark_runtime_dirty();
         }
-        let had_terminal_output = panel_output.had_terminal_output;
+        let had_tmux_output = self.board.process_tmux_events();
+        let had_terminal_output = panel_output.had_terminal_output || had_tmux_output;
 
         for panel_id in self.board.exited_panels() {
             self.panels_to_close.push(panel_id);

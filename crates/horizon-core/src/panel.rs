@@ -13,6 +13,8 @@ use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{AgentNotification, Terminal, TerminalSpawnOptions};
+use crate::terminal_emulator::TerminalEmulator;
+use crate::tmux::terminal::TmuxTerminal;
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
@@ -193,6 +195,36 @@ impl Panel {
         self.content.terminal_mut()
     }
 
+    /// Convenience accessor for the tmux terminal content.
+    #[must_use]
+    pub fn tmux_terminal(&self) -> Option<&TmuxTerminal> {
+        self.content.tmux_terminal()
+    }
+
+    /// Mutable accessor for the tmux terminal content.
+    pub fn tmux_terminal_mut(&mut self) -> Option<&mut TmuxTerminal> {
+        self.content.tmux_terminal_mut()
+    }
+
+    /// Generic accessor: returns any terminal backend as a trait object.
+    #[must_use]
+    pub fn emulator(&self) -> Option<&dyn TerminalEmulator> {
+        match &self.content {
+            PanelContent::Terminal(t) => Some(t),
+            PanelContent::TmuxTerminal(t) => Some(t.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Mutable generic accessor for any terminal backend.
+    pub fn emulator_mut(&mut self) -> Option<&mut dyn TerminalEmulator> {
+        match &mut self.content {
+            PanelContent::Terminal(t) => Some(t),
+            PanelContent::TmuxTerminal(t) => Some(t.as_mut()),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
         self.ssh_status
@@ -243,9 +275,58 @@ impl Panel {
         spawn_panel(id, workspace_id, opts)
     }
 
+    /// Create a panel backed by a [`TmuxTerminal`] instead of a direct PTY.
+    ///
+    /// Used when the tmux backend is active.  The terminal receives output via
+    /// [`Panel::feed_tmux_output`] and sends input through the
+    /// [`TmuxInputSender`](crate::tmux::terminal::TmuxInputSender).
+    #[must_use]
+    pub fn new_tmux(id: PanelId, workspace_id: WorkspaceId, tmux_terminal: TmuxTerminal, kind: PanelKind) -> Self {
+        Self {
+            id,
+            local_id: crate::runtime_state::new_local_id(),
+            title: kind.display_name().to_string(),
+            terminal_title: String::new(),
+            kind,
+            resume: PanelResume::default(),
+            layout: PanelLayout::default(),
+            workspace_id,
+            content: PanelContent::TmuxTerminal(Box::new(tmux_terminal)),
+            session_binding: None,
+            template: None,
+            launched_at_millis: current_unix_millis(),
+            has_custom_name: false,
+            had_recent_output: false,
+            last_output_at_millis: None,
+            launch_command: None,
+            launch_args: Vec::new(),
+            launch_cwd: None,
+            ssh_connection: None,
+            ssh_status: None,
+        }
+    }
+
     /// Drain pending terminal events. Returns `true` if any output was processed.
+    ///
+    /// For tmux terminals, output is fed externally via `feed_tmux_output`,
+    /// so this only drains the direct-PTY event loop.
     #[profiling::function]
     pub fn process_output(&mut self) -> PanelProcessOutput {
+        // Tmux-backed terminals have their output fed by Board::process_tmux_events
+        // rather than being polled here — report whatever had_recent_output flag
+        // was most recently set, then clear it.
+        if matches!(&self.content, PanelContent::TmuxTerminal(_)) {
+            let had_output = self.had_recent_output;
+            self.had_recent_output = false;
+            if had_output {
+                self.last_output_at_millis = Some(current_unix_millis());
+            }
+            return PanelProcessOutput {
+                had_output,
+                cwd_changed: false,
+            };
+        }
+
         let should_track_live_cwd = matches!(self.kind, PanelKind::Shell | PanelKind::Command);
         let Some(terminal) = self.content.terminal_mut() else {
             self.had_recent_output = false;
@@ -277,6 +358,25 @@ impl Panel {
         PanelProcessOutput {
             had_output,
             cwd_changed: self.update_tracked_cwd(current_cwd),
+        }
+    }
+
+    /// Feed output bytes from tmux to this panel's tmux terminal.
+    ///
+    /// Returns `true` if bytes were processed.
+    pub fn feed_tmux_output(&mut self, data: &[u8]) -> bool {
+        if let PanelContent::TmuxTerminal(tmux_term) = &mut self.content {
+            let had = tmux_term.feed_output(data);
+            self.had_recent_output = had;
+            if had && !self.has_custom_name {
+                let title = tmux_term.title();
+                if !title.is_empty() {
+                    self.terminal_title = title.to_string();
+                }
+            }
+            had
+        } else {
+            false
         }
     }
 
@@ -319,7 +419,11 @@ impl Panel {
 
     #[must_use]
     pub fn child_exited(&self) -> bool {
-        self.content.terminal().is_some_and(Terminal::child_exited)
+        match &self.content {
+            PanelContent::Terminal(t) => t.child_exited(),
+            PanelContent::TmuxTerminal(t) => t.child_exited(),
+            _ => false,
+        }
     }
 
     #[must_use]
@@ -349,8 +453,10 @@ impl Panel {
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.write_input(bytes);
+        match &mut self.content {
+            PanelContent::Terminal(terminal) => terminal.write_input(bytes),
+            PanelContent::TmuxTerminal(terminal) => terminal.write_input(bytes),
+            _ => {}
         }
     }
 
@@ -358,7 +464,8 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
+            // Tmux terminals don't need shutdown — the tmux server keeps running.
+            PanelContent::TmuxTerminal(_) | PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
         }
     }
 
@@ -370,7 +477,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::TmuxTerminal(_) | PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -382,7 +489,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::TmuxTerminal(_) | PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
         }
     }
 
@@ -408,6 +515,12 @@ impl Panel {
 
         if let PanelContent::Usage(_) = &self.content {
             self.content = PanelContent::Usage(UsageDashboard::new());
+            return Ok(());
+        }
+
+        // Tmux-backed terminals can't be restarted from Horizon — the tmux
+        // server owns the session.  Just no-op.
+        if matches!(&self.content, PanelContent::TmuxTerminal(_)) {
             return Ok(());
         }
 
@@ -483,20 +596,26 @@ impl Panel {
     }
 
     pub fn scroll_scrollback_by(&mut self, delta: i32) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.scroll_scrollback_by(delta);
+        match &mut self.content {
+            PanelContent::Terminal(t) => t.scroll_scrollback_by(delta),
+            PanelContent::TmuxTerminal(t) => t.scroll_scrollback_by(delta),
+            _ => {}
         }
     }
 
     pub fn set_scrollback(&mut self, scrollback: usize) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.set_scrollback(scrollback);
+        match &mut self.content {
+            PanelContent::Terminal(t) => t.set_scrollback(scrollback),
+            PanelContent::TmuxTerminal(t) => t.set_scrollback(scrollback),
+            _ => {}
         }
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.resize(rows, cols, cell_width, cell_height);
+        match &mut self.content {
+            PanelContent::Terminal(t) => t.resize(rows, cols, cell_width, cell_height),
+            PanelContent::TmuxTerminal(t) => t.resize(rows, cols),
+            _ => {}
         }
     }
 
@@ -507,8 +626,10 @@ impl Panel {
     }
 
     pub fn set_focused(&mut self, focused: bool) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.set_focused(focused);
+        match &mut self.content {
+            PanelContent::Terminal(t) => t.set_focused(focused),
+            PanelContent::TmuxTerminal(t) => t.set_focused(focused),
+            _ => {}
         }
     }
 
@@ -525,8 +646,11 @@ impl Panel {
         if age_ms < 10_000 {
             return None;
         }
-        let terminal = self.content.terminal()?;
-        let text = terminal.last_lines_text(3);
+        let text = match &self.content {
+            PanelContent::Terminal(t) => t.last_lines_text(3),
+            PanelContent::TmuxTerminal(t) => t.last_lines_text(3),
+            _ => return None,
+        };
         if text.is_empty() {
             return None;
         }

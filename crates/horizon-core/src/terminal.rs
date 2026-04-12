@@ -4,7 +4,7 @@ mod lifecycle;
 mod replay;
 mod resize;
 mod selection;
-mod support;
+pub(crate) mod support;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -133,6 +133,82 @@ pub struct Terminal {
     child_exited: bool,
     bell_pending: bool,
     pending_notification: Option<AgentNotification>,
+}
+
+impl crate::terminal_emulator::TerminalEmulator for Terminal {
+    fn write_input(&self, bytes: &[u8]) {
+        self.write_input(bytes);
+    }
+
+    fn mode(&self) -> alacritty_terminal::term::TermMode {
+        self.mode()
+    }
+
+    fn cols(&self) -> u16 {
+        self.cols()
+    }
+
+    fn rows(&self) -> u16 {
+        self.rows()
+    }
+
+    fn scrollback(&self) -> usize {
+        self.scrollback()
+    }
+
+    fn set_scrollback(&mut self, offset: usize) {
+        self.set_scrollback(offset);
+    }
+
+    fn scroll_scrollback_by(&mut self, delta: i32) {
+        self.scroll_scrollback_by(delta);
+    }
+
+    fn history_size(&self) -> usize {
+        self.history_size()
+    }
+
+    fn child_exited(&self) -> bool {
+        self.child_exited()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.has_selection()
+    }
+
+    fn start_selection(
+        &self,
+        sel_type: alacritty_terminal::selection::SelectionType,
+        row: usize,
+        col: usize,
+        side: alacritty_terminal::index::Side,
+    ) {
+        self.start_selection(sel_type, row, col, side);
+    }
+
+    fn update_selection(&self, row: usize, col: usize, side: alacritty_terminal::index::Side) {
+        self.update_selection(row, col, side);
+    }
+
+    fn clear_selection(&self) {
+        self.clear_selection();
+    }
+
+    fn selection_to_string(&self) -> Option<String> {
+        self.selection_to_string()
+    }
+
+    fn reset_damage(&self) {
+        self.reset_damage();
+    }
+
+    fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
+        self.clickable_at_point(row, col)
+    }
+
+    fn last_lines_text(&self, max_lines: usize) -> String {
+        self.last_lines_text(max_lines)
+    }
 }
 
 #[cfg(test)]
